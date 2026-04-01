@@ -3,6 +3,7 @@ import logging
 import json
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse, PlainTextResponse
 from binance.websocket.um_futures.websocket_client import UMFuturesWebsocketClient
 
 from core.binance_client import WS_URL, get_listen_key, keepalive_listen_key
@@ -24,6 +25,8 @@ async def lifespan(app: FastAPI):
     global listen_key, ws_client
     
     logger.info("Initializing bot components...")
+    logger.info("Swagger UI Docs : http://127.0.0.1:8000/docs")
+    logger.info("ReDoc Docs      : http://127.0.0.1:8000/redoc")
     
     # Init database connection
     init_supabase()
@@ -115,6 +118,16 @@ async def keepalive_loop():
                 # but depending on the state, a container restart might be preferred if connection dropped entirely.
             except Exception as fallback_e:
                 logger.error(f"Fallback keep-alive check failed: {str(fallback_e)}")
+
+@app.get("/", include_in_schema=False)
+async def root():
+    """Health check endpoint so the browser displays bot status securely."""
+    return JSONResponse(content={"status": "online", "message": "Binance Futures bot is active."})
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Suppress browsers from spamming 404 errors when looking for a favicon."""
+    return PlainTextResponse("")
 
 @app.post("/webhook")
 async def receive_webhook(payload: WebhookPayload):

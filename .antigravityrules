@@ -5,3 +5,4 @@
 4. SEBELUM order dikirim, semua variabel `price` wajib dibulatkan sesuai `tickSize`, dan `quantity` sesuai `stepSize` dari exchange_info Binance.
 5. Gunakan `supabase` (Official Python SDK) sebagai Database. Log semua error/traceback ke tabel `bot_logs`.
 6. Jangan ada hardcode API key. Gunakan `os.getenv()`.
+7. Untuk perintah Supabase CLI, JANGAN menggunakan prefix `npx supabase ...`, tapi langsung gunakan perintah bawaan Supabase secara spesifik (misal: `supabase db push`).
