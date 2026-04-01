@@ -1,0 +1,7 @@
+# STRICT PROJECT RULES FOR DEEPMIND / GEMINI 3.1
+1. JANGAN gunakan library pihak ketiga seperti `ccxt` atau `python-binance`. WAJIB gunakan official library: `binance-connector-python`.
+2. DILARANG menggunakan REST API polling untuk cek status order. Gunakan WebSocket `USER_DATA_STREAM` (`ORDER_TRADE_UPDATE`) untuk trigger TP/SL setelah Entry "FILLED".
+3. Semua order keluar (TP/SL) WAJIB menyertakan `closePosition=True`.
+4. SEBELUM order dikirim, semua variabel `price` wajib dibulatkan sesuai `tickSize`, dan `quantity` sesuai `stepSize` dari exchange_info Binance.
+5. Gunakan `supabase` (Official Python SDK) sebagai Database. Log semua error/traceback ke tabel `bot_logs`.
+6. Jangan ada hardcode API key. Gunakan `os.getenv()`.
