@@ -12,6 +12,11 @@ class WebhookPayload(BaseModel):
     tp: OrderDetail
     sl: OrderDetail
 
+class CancelPayload(BaseModel):
+    symbol: str
+    order_id: str | None = None
+    cancel_all: bool = False
+
 def extract_order_params(order_type: str) -> dict:
     """
     Translates payload order types to Binance accepted types and modifiers.

@@ -10,3 +10,5 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Default is True to prevent accidental real money usage unless specified
 IS_TESTNET = os.getenv("IS_TESTNET", "True").lower() in ("true", "1", "t")
+
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")

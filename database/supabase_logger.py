@@ -74,3 +74,43 @@ def update_trade(match_criteria: dict, update_data: dict):
         
     except Exception as e:
         logger.error(f"Failed to update trade in Supabase: {str(e)}")
+
+def get_last_wallet_entry() -> dict:
+    """
+    Fetches the latest wallet balance from daily_portfolio.
+    """
+    try:
+        if not supabase:
+            logger.warning("Supabase not init, mock wallet data.")
+            return {"wallet_balance": 1000, "wallet_balance_percent": 100}
+
+        res = supabase.table("daily_portfolio").select("*").order("date", desc=True).limit(1).execute()
+        if res.data:
+            return res.data[0]
+        return None
+    except Exception as e:
+        logger.error(f"Failed to fetch last wallet entry: {str(e)}")
+        return None
+
+def update_signal(data: dict):
+    """
+    Upserts signal data to signals table.
+    """
+    try:
+        if not supabase:
+            return
+        # Assume data has a unique key like 'symbol' to upsert correctly or supabase handles it based on PK
+        supabase.table("signals").upsert(data).execute()
+    except Exception as e:
+        logger.error(f"Failed to upsert signal: {str(e)}")
+
+def remove_signal(symbol: str):
+    """
+    Removes a signal from the signals table.
+    """
+    try:
+        if not supabase:
+            return
+        supabase.table("signals").delete().eq("symbol", symbol).execute()
+    except Exception as e:
+        logger.error(f"Failed to remove signal for {symbol}: {str(e)}")

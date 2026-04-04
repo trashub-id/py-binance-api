@@ -1,0 +1,181 @@
+{
+	"info": {
+		"_postman_id": "c1d4de47-0d5b-42ea-a417-64fbc60d69cb",
+		"name": "Binance py",
+		"description": "Kumpulan endpoint webhook FastAPI untuk project py-binance-api (USDT-M Futures Bot).",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "1. Sinyal Webhook Biasa (LONG)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"quantity\": 0.01,\n  \"entry\": { \"type\": \"POST_ONLY\", \"price\": 60000 },\n  \"tp\": { \"type\": \"LIMIT\", \"price\": 61000 },\n  \"sl\": { \"type\": \"STOP_MARKET\", \"price\": 59500 }\n}"
+				},
+				"url": {
+					"raw": "{{port}}/webhook",
+					"host": [
+						"{{port}}"
+					],
+					"path": [
+						"webhook"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "2. Batalkan Eksekusi (/cancel)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"cancel_all\": true\n}"
+				},
+				"url": {
+					"raw": "{{port}}/cancel",
+					"host": [
+						"{{port}}"
+					],
+					"path": [
+						"cancel"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "3. Wallet: Rebalance BNB",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"pass\": \"@Trashub2025\",\n  \"min_bnb_percent\": 5.0,\n  \"fromAsset\": \"USDT\"\n}"
+				},
+				"url": {
+					"raw": "{{port}}/api/wallet/rebalance-bnb",
+					"host": [
+						"{{port}}"
+					],
+					"path": [
+						"api",
+						"wallet",
+						"rebalance-bnb"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "4. Wallet: Update Daily",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"pass\": \"@Trashub2025\",\n  \"type\": \"trigger_update_wallet\",\n  \"wallet_balance_percent\": \"100\",\n  \"targetAsset\": \"USDT\"\n}"
+				},
+				"url": {
+					"raw": "{{port}}/api/wallet/update-daily",
+					"host": [
+						"{{port}}"
+					],
+					"path": [
+						"api",
+						"wallet",
+						"update-daily"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "5. Order: Place Auto Order",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"pass\": \"@Trashub2025\",\n  \"type\": \"trigger_order\",\n  \"coin\": \"BTC\",\n  \"positionSide\": \"LONG\",\n  \"type_entry\": \"LIMIT\",\n  \"entry\": \"60000\",\n  \"tp\": \"62000\",\n  \"sl\": \"59000\",\n  \"percent_balance\": \"10\",\n  \"percent_risk\": \"2\",\n  \"tp_cancel_percent\": \"0.5\"\n}"
+				},
+				"url": {
+					"raw": "{{port}}/api/order/place-order",
+					"host": [
+						"{{port}}"
+					],
+					"path": [
+						"api",
+						"order",
+						"place-order"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "6. Order: Place Stop Auto",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"pass\": \"@Trashub2025\",\n  \"type\": \"trigger_order\",\n  \"coin\": \"ETH\",\n  \"positionSide\": \"LONG\",\n  \"entry\": \"3500\",\n  \"tp_percent\": \"5\",\n  \"sl_percent\": \"2\",\n  \"percent_balance\": \"15\",\n  \"percent_risk\": \"1\"\n}"
+				},
+				"url": {
+					"raw": "{{port}}/api/order/place-stop-auto",
+					"host": [
+						"{{port}}"
+					],
+					"path": [
+						"api",
+						"order",
+						"place-stop-auto"
+					]
+				}
+			},
+			"response": []
+		}
+	],
+	"variable": [
+		{
+			"key": "port",
+			"value": "http://127.0.0.1:8000",
+			"type": "string"
+		}
+	]
+}

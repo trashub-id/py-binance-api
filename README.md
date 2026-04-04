@@ -59,28 +59,127 @@ Sinyal untuk langsung memasuki pasar di saat harga terkini (*Taker*). Pada tipe 
 }
 ```
 
-> **INFO:** Order TP (`LIMIT`) akan otomatis dijalankan dengan setelan **`reduceOnly=True`**. Sedangkan untuk SL (`STOP_MARKET`) otomatis akan menggunakan parameter **`closePosition=True`**, selaras dengan standar keamanan API Binance agar posisi tidak berlipat ganda dan berbalik arah *(*rekty*)*.
+### 4. Batal Semua Order (Sapu Bersih Koin Terkait)
+Digunakan jika Anda ingin menembakkan skenario "PANIC CANCEL" secara instan. Mengirim JSON ini ke *endpoint* **`/cancel`** akan otomatis menghapus semua Limit dan Stop Order dari *koin tunggal* yang bersangkutan.
+
+```json
+{
+  "symbol": "BTCUSDT",
+  "cancel_all": true
+}
+```
+
+### 5. Batal Pesanan Secara Spesifik Saja
+Digunakan jika Anda menggunakan *Webhook* secara terukur dan tahu *Order ID* targetnya di Binance. Kirimkan JSON ke *endpoint* **`/cancel`**:
+
+```json
+{
+  "symbol": "ETHUSDT",
+  "order_id": "13018473497"
+}
+```
+
+### 6. Wallet: Auto-Rebalance BNB
+Digunakan untuk mengecek saldo aset stabil Anda (misal: USDT) dan secara cerdas memastikannya memiliki proporsi BNB yang cukup untuk mengamankan diskon *fee* transaksi. Jika persentase BNB kurang dari ambang batas (`min_bnb_percent`), sistem otomatis mengonversi seperlunya (USD ke BNB) menggunakan fitur `Convert` Binance. Kirimkan JSON ke *endpoint* **`/api/wallet/rebalance-bnb`**:
+
+```json
+{
+  "pass": "RAHASIA_WEBHOOK_ANDA",
+  "min_bnb_percent": 5.0,
+  "fromAsset": "USDT"
+}
+```
+
+### 7. Wallet: Update Daily Portfolio
+Digunakan untuk merekam *snapshot* kondisi keseimbangan portofolio aset, persentase nilai tukar, dan PnL yang belum direalisasikan (*Unrealized PnL*) ke dalam fungsi logs (*Supabase*) di waktu penutupan hari. Kirimkan JSON ke *endpoint* **`/api/wallet/update-daily`**:
+
+```json
+{
+  "pass": "@Trashub2025",
+  "type": "trigger_update_wallet",
+  "wallet_balance_percent": "83.33",
+  "targetAsset": "USDC"
+}
+```
+
+### 8. Order: Place Auto Order (place-order)
+Digunakan untuk mengeksekusi *Entry Order* beserta dengan kalkulasi *Risk Management* (Quantity & Leverage) secara terotomatisasi dan dinamis berdasarkan persentase modal terakhir (*single wallet*) di `daily_portfolio`. Endpoint ini juga otomatis memasang setelan *Stop Loss* dan meng-update *Signals* database. Kirimkan JSON ke *endpoint* **`/api/order/place-order`**:
+
+```json
+{
+  "pass": "RAHASIA_WEBHOOK_ANDA",
+  "type": "trigger_order",
+  "coin": "BTC",
+  "positionSide": "LONG",
+  "type_entry": "LIMIT",
+  "entry": "60000",
+  "tp": "62000",
+  "sl": "59000",
+  "percent_balance": "10",
+  "percent_risk": "2",
+  "tp_cancel_percent": "0.5"
+}
+```
+*(Bisa juga mengirimkan `type: "trigger_cancel"` untuk menghapus order dan record secara otomatis).*
+
+### 9. Order: Place Stop Auto Order (place-stop-auto)
+Mirip dengan `place-order`, namun digunakan jika *Entry* menggunakan skenario *Breakout/Breakdown* (`STOP_MARKET`) dan parameter TP & SL didefinisikan menggunakan ukuran *persentase*. TP dan SL akan tertahan sementara waktu dan baru diinjeksi via *WebSocket* saat Entry tereksekusi. Kirimkan JSON ke *endpoint* **`/api/order/place-stop-auto`**:
+
+```json
+{
+  "pass": "RAHASIA_WEBHOOK_ANDA",
+  "type": "trigger_order",
+  "coin": "ETH",
+  "positionSide": "LONG",
+  "entry": "3500",
+  "tp_percent": "5",
+  "sl_percent": "2",
+  "percent_balance": "15",
+  "percent_risk": "1"
+}
+```
+
+> **INFO:** Order TP (`LIMIT`) akan otomatis dijalankan dengan setelan **`reduceOnly=True`**. Sedangkan untuk SL (`STOP_MARKET`) otomatis akan dieksekusi persis sama dengan _reduce-only limit_, selaras dengan standar pembaruan keamanan API Binance (tanpa menyentuh `/algoOrder` _rules_ khusus) agar posisi tidak berlipat ganda _(*rekty*)_.
 
 ---
 
 ## 🛠 Instalasi dan Konfigurasi
 
-1. Pastikan Anda menginstal *library*:
-   `pip install -r requirements.txt` (atau instal `fastapi uvicorn binance-futures-connector supabase python-dotenv pydantic`).
+1. (Penting jika baru pertama kali) Buat *Virtual Environment*:
+    ```bash
+    python3 -m venv venv
+    ```
 
-2. Salin rahasia env milik Anda. Atur _API Keys_ pada berkas `.env`:
+2. Salin rahasia env milik Anda. Atur _API Keys_ pada berkas `.env` (Bisa menggunakan referensi `.env.example`):
     ```ini
     BINANCE_API_KEY=KunciBinanceTestnetAnda...
     BINANCE_API_SECRET=RahasiaBinanceAnda...
     SUPABASE_URL=URLSupabaseCloudAnda...
     SUPABASE_KEY=eyJ... (KUNCI SERVICE_ROLE SUPABASE ANDA)
     IS_TESTNET=True
+    WEBHOOK_SECRET=RAHASIA_WEBHOOK_ANDA
     ```
 
 3. Ekspor & dorong Struktur Data Tabel (Bot_Logs & Trades) dengan `supabase db push`.
 
-4. Start Servis!
-   `python main.py`
+## ▶️ Cara Menjalankan Bot
+
+Pastikan Anda memasukkan 3 perintah ini secara berurutan di terminal setiap kali ingin menyalakan proses algoritma bot:
+
+```bash
+# 1. Mengaktifkan Virtual Environment (Status Aktif = Ada teks '(venv)')
+source venv/bin/activate
+
+# 2. (Opsional) Memastikan semua paket sistem sudah terinstal di venv
+pip3 install -r requirements.txt
+
+# 3. Menjalankan Bot!
+python3 main.py
+```
+
+*Jika Anda ingin menyalakannya menggunakan uvicorn, di Langkah ke-3 gunakan perintah:* `uvicorn main:app --host 0.0.0.0 --port 8000 --reload`
+*Setelah server menyala, dokumentasi UI Swagger API bot Anda bisa diakses pada:* `http://127.0.0.1:8000/docs`
+
 
 ## ⚠️ Trouble-Shooting Umum!
 - **`Error -4061 (Invalid side/Position)`**: Artinya akun Anda berada di dalam mode **Hedge Mode**. Silakan diubah ke tipe **One-Way Mode** pada pegaturan akun *binance testnet* Anda!

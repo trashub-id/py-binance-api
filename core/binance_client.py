@@ -66,3 +66,17 @@ def keepalive_listen_key(listen_key: str):
         logger.debug(f"Renewed listen key: {listen_key}")
     except Exception as e:
         logger.error(f"Failed to renew listen key: {str(e)}")
+
+def new_algo_order(**params) -> dict:
+    """
+    Places a conditional/algo order via /fapi/v1/algoOrder.
+    Used for STOP_MARKET orders which are not supported on the regular /fapi/v1/order endpoint.
+    """
+    try:
+        response = rest_client.sign_request("POST", "/fapi/v1/algoOrder", params)
+        logger.info(f"Algo order placed: {response}")
+        return response
+    except Exception as e:
+        logger.error(f"Failed to place algo order: {str(e)}")
+        raise e
+
