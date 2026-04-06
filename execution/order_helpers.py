@@ -96,7 +96,7 @@ def clean_symbol(symbol: str, position_side: str):
 
     # 1. Cancel specific regular open orders
     try:
-        open_orders = rest_client.get_open_orders(symbol=symbol)
+        open_orders = rest_client.get_orders(symbol=symbol)
         for order in open_orders:
             if order.get("positionSide", "").upper() == position_side:
                 try:
@@ -109,9 +109,9 @@ def clean_symbol(symbol: str, position_side: str):
 
     # 2. Cancel specific algo/conditional orders
     try:
-        algo_orders = rest_client.sign_request("GET", "/fapi/v1/algoOpenOrders", {"symbol": symbol})
+        algo_orders = rest_client.sign_request("GET", "/fapi/v1/openAlgoOrders", {"symbol": symbol})
         
-        # Binance API /algoOpenOrders bisa return list atau dict
+        # Binance API /openAlgoOrders bisa return list atau dict
         algo_list = []
         if isinstance(algo_orders, list):
             algo_list = algo_orders
@@ -125,6 +125,7 @@ def clean_symbol(symbol: str, position_side: str):
         for algo in algo_list:
             if algo.get("positionSide", "").upper() == position_side:
                 try:
+                    # Endpoint pembatalan algo order yg benar adalah DELETE /fapi/v1/algoOrder
                     rest_client.sign_request("DELETE", "/fapi/v1/algoOrder", {"symbol": symbol, "algoId": algo.get("algoId")})
                     logger.info(f"[CLEAN] Canceled algo order {algo.get('algoId')} ({position_side}) for {symbol}")
                 except Exception as e:
