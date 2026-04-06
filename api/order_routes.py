@@ -48,9 +48,11 @@ async def place_order(payload: PlaceOrderRequest):
     symbol = str(payload.coin).upper()
 
     if payload.type == "trigger_cancel":
+        if not payload.positionSide:
+            raise HTTPException(status_code=400, detail="positionSide is required for cancel")
         try:
-            clean_symbol(symbol)
-            logger.info(f"[TP CANCEL ✅] {symbol} all orders & positions cleaned")
+            clean_symbol(symbol, payload.positionSide)
+            logger.info(f"[TP CANCEL ✅] {symbol} {payload.positionSide} orders & positions cleaned")
             remove_signal(symbol)
             return {"status": "success", "message": "Canceled"}
         except Exception as e:
@@ -79,8 +81,8 @@ async def place_order(payload: PlaceOrderRequest):
     close_side = "SELL" if payload.positionSide == "LONG" else "BUY"
 
     try:
-        # 1. CLEAN: Cancel semua open orders, algo orders, dan posisi terbuka
-        clean_symbol(symbol)
+        # 1. CLEAN: Cancel specific side orders, algo orders, and positions
+        clean_symbol(symbol, payload.positionSide)
 
         ql = get_quantity_and_leverage(
             entry_price=payload.entry,
@@ -100,10 +102,11 @@ async def place_order(payload: PlaceOrderRequest):
             "tp_cancel_percent": payload.tp_cancel_percent
         })
 
-        # Entry Order (One-Way Mode: tanpa positionSide)
+        # Entry Order (Hedge Mode: dengan positionSide)
         entry_params = {
             "symbol": symbol,
             "side": side,
+            "positionSide": payload.positionSide,
             "quantity": ql["quantity"],
             "type": payload.type_entry or "MARKET"
         }
@@ -133,6 +136,7 @@ async def place_order(payload: PlaceOrderRequest):
 
         pending_entries[entry_order_id] = {
             "symbol": symbol,
+            "position_side": payload.positionSide,
             "close_side": close_side,
             "quantity": ql["quantity"],
             "tp_price": tp_price_rounded,
@@ -145,6 +149,7 @@ async def place_order(payload: PlaceOrderRequest):
             "symbol": symbol,
             "algoType": "CONDITIONAL",
             "side": close_side,
+            "positionSide": payload.positionSide,
             "type": "STOP_MARKET",
             "quantity": ql["quantity"],
             "triggerPrice": payload.sl,
@@ -171,9 +176,11 @@ async def place_stop_auto(payload: StopAutoRequest):
     symbol = str(payload.coin).upper()
 
     if payload.type == "trigger_cancel":
+        if not payload.positionSide:
+            raise HTTPException(status_code=400, detail="positionSide is required for cancel")
         try:
-            clean_symbol(symbol)
-            logger.info(f"[STOP-AUTO CANCEL ✅] {symbol} all orders & positions cleaned")
+            clean_symbol(symbol, payload.positionSide)
+            logger.info(f"[STOP-AUTO CANCEL ✅] {symbol} {payload.positionSide} orders & positions cleaned")
             remove_signal(symbol)
             return {"status": "success", "message": "Canceled"}
         except Exception as e:
@@ -213,8 +220,8 @@ async def place_stop_auto(payload: StopAutoRequest):
         balance = "0"
 
     try:
-        # 1. CLEAN: Cancel semua open orders, algo orders, dan posisi terbuka
-        clean_symbol(symbol)
+        # 1. CLEAN: Cancel specific side orders, algo orders, and positions
+        clean_symbol(symbol, payload.positionSide)
 
         ql = get_quantity_and_leverage(
             entry_price=payload.entry,
@@ -232,6 +239,7 @@ async def place_stop_auto(payload: StopAutoRequest):
             "symbol": symbol,
             "algoType": "CONDITIONAL",
             "side": side,
+            "positionSide": payload.positionSide,
             "type": "STOP_MARKET",
             "triggerPrice": payload.entry, 
             "quantity": ql["quantity"],
@@ -260,6 +268,7 @@ async def place_stop_auto(payload: StopAutoRequest):
         pending_algo_entries[symbol] = {
             "algo_id": algo_id,
             "symbol": symbol,
+            "position_side": payload.positionSide,
             "close_side": close_side,
             "quantity": ql["quantity"],
             "tp_percent": tp_percent_num,

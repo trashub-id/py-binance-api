@@ -30,11 +30,11 @@ def _place_tp_sl(entry_id: str, config: dict):
             tp_params = {
                 "symbol": symbol,
                 "side": config["close_side"],
+                "positionSide": config.get("position_side"),
                 "type": "LIMIT",
                 "quantity": config["quantity"],
                 "price": config["tp_price"],
-                "timeInForce": "GTX", # GTX ensures 100% Post Only (Maker) on Binance Futures
-                "reduceOnly": "true"
+                "timeInForce": "GTX" # GTX ensures 100% Post Only (Maker) on Binance Futures
             }
         else:
             # E.g. TAKE_PROFIT_MARKET → via Algo Order API
@@ -42,6 +42,7 @@ def _place_tp_sl(entry_id: str, config: dict):
                 "symbol": symbol,
                 "algoType": "CONDITIONAL",
                 "side": config["close_side"],
+                "positionSide": config.get("position_side"),
                 "type": tp_type,
                 "triggerPrice": config["tp_price"],
                 "quantity": config["quantity"],
@@ -66,6 +67,7 @@ def _place_tp_sl(entry_id: str, config: dict):
             "symbol": symbol,
             "algoType": "CONDITIONAL",
             "side": config["close_side"],
+            "positionSide": config.get("position_side"),
             "type": "STOP_MARKET",
             "quantity": config["quantity"],
             "triggerPrice": config["sl_price"],
@@ -266,6 +268,7 @@ def handle_order_update(event: dict):
                         # Build resolved config with actual prices for _place_tp_sl
                         resolved_config = {
                             "symbol": symbol,
+                            "position_side": config.get("position_side"),
                             "close_side": config["close_side"],
                             "quantity": config["quantity"],
                             "tp_price": tp_price,

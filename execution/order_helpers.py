@@ -83,62 +83,91 @@ def get_quantity_and_leverage(entry_price: str, sl_price: str, percent_risk: str
         "leverage": leverage
     }
 
-def clean_symbol(symbol: str):
+def clean_symbol(symbol: str, position_side: str):
     """
-    Membersihkan semua order dan posisi terbuka untuk symbol tertentu.
+    Membersihkan order dan posisi terbuka HANYA untuk positionSide tertentu.
     Flow:
-      1. Cancel ALL open orders (regular)
-      2. Cancel ALL algo/conditional orders
-      3. Close ALL open positions (MARKET order)
+      1. Cancel specific open orders (regular)
+      2. Cancel specific algo/conditional orders
+      3. Close open positions untuk positionSide tersebut
     """
     symbol = symbol.upper()
+    position_side = position_side.upper()
 
-    # 1. Cancel all regular open orders
+    # 1. Cancel specific regular open orders
     try:
-        rest_client.cancel_open_orders(symbol=symbol)
-        logger.info(f"[CLEAN] Canceled all open orders for {symbol}")
+        open_orders = rest_client.get_open_orders(symbol=symbol)
+        for order in open_orders:
+            if order.get("positionSide", "").upper() == position_side:
+                try:
+                    rest_client.cancel_order(symbol=symbol, orderId=order["orderId"])
+                    logger.info(f"[CLEAN] Canceled open order {order['orderId']} ({position_side}) for {symbol}")
+                except Exception as e:
+                    logger.debug(f"[CLEAN] Failed to cancel open order {order['orderId']}: {str(e)}")
     except Exception as e:
-        # -2011 = "Unknown order" (no orders to cancel) — safe to ignore
-        logger.debug(f"[CLEAN] cancel_open_orders: {str(e)}")
+        logger.debug(f"[CLEAN] error fetching open_orders: {str(e)}")
 
-    # 2. Cancel all algo/conditional orders
+    # 2. Cancel specific algo/conditional orders
     try:
-        rest_client.sign_request("DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol})
-        logger.info(f"[CLEAN] Canceled all algo orders for {symbol}")
+        algo_orders = rest_client.sign_request("GET", "/fapi/v1/algoOpenOrders", {"symbol": symbol})
+        
+        # Binance API /algoOpenOrders bisa return list atau dict
+        algo_list = []
+        if isinstance(algo_orders, list):
+            algo_list = algo_orders
+        elif isinstance(algo_orders, dict):
+            # Coba ambil lists dari key yang umum di response Binance
+            for key in ["openAlgoOrders", "algoOrderList", "orders"]:
+                if key in algo_orders:
+                    algo_list = algo_orders[key]
+                    break
+
+        for algo in algo_list:
+            if algo.get("positionSide", "").upper() == position_side:
+                try:
+                    rest_client.sign_request("DELETE", "/fapi/v1/algoOrder", {"symbol": symbol, "algoId": algo.get("algoId")})
+                    logger.info(f"[CLEAN] Canceled algo order {algo.get('algoId')} ({position_side}) for {symbol}")
+                except Exception as e:
+                    logger.debug(f"[CLEAN] Failed to cancel algo order {algo.get('algoId')}: {str(e)}")
     except Exception as e:
-        logger.debug(f"[CLEAN] cancel_algo_orders: {str(e)}")
+        logger.debug(f"[CLEAN] error fetching algo_orders: {str(e)}")
 
-    # 3. Close all open positions
-    cancel_position_by_symbol(symbol)
+    # 3. Close open positions
+    cancel_position_by_side(symbol, position_side)
 
 
-def cancel_position_by_symbol(symbol: str) -> list:
+def cancel_position_by_side(symbol: str, position_side: str) -> list:
     """
-    Fetches all positions for a symbol and sends MARKET orders to close any open quantities.
-    One-Way Mode: positionSide tidak dikirim, side ditentukan dari tanda positionAmt.
+    Fetches all positions for a symbol and sends MARKET orders to close any open quantities
+    matching the specified position_side.
+    Hedge Mode: positionSide dikirim, side disesuaikan, reduceOnly tidak diperbolehkan.
     """
     symbol = symbol.upper()
+    position_side = position_side.upper()
     positions = rest_client.get_position_risk(symbol=symbol)
 
     close_orders = []
     for pos in positions:
+        if pos.get("positionSide", "").upper() != position_side:
+            continue
+            
         amt = float(pos["positionAmt"])
         if amt != 0:
             qty = abs(amt)
-            # One-Way Mode: amt positif = long (close dengan SELL), amt negatif = short (close dengan BUY)
-            side = "SELL" if amt > 0 else "BUY"
+            # Hedge Mode: close LONG dengan SELL, close SHORT dengan BUY
+            side = "SELL" if position_side == "LONG" else "BUY"
 
             try:
                 res = rest_client.new_order(
                     symbol=symbol,
                     side=side,
+                    positionSide=position_side,
                     type="MARKET",
-                    quantity=qty,
-                    reduceOnly="true"
+                    quantity=qty
                 )
                 close_orders.append(res)
-                logger.info(f"[CLEAN] Closed position for {symbol}, amt: {amt}")
+                logger.info(f"[CLEAN] Closed position for {symbol} ({position_side}), amt: {amt}")
             except Exception as e:
-                logger.error(f"Failed to close position for {symbol}: {str(e)}")
+                logger.error(f"Failed to close position for {symbol} ({position_side}): {str(e)}")
                 raise e
     return close_orders
