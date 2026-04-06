@@ -33,7 +33,7 @@ def _place_tp_sl(entry_id: str, config: dict):
                 "type": "LIMIT",
                 "quantity": config["quantity"],
                 "price": config["tp_price"],
-                "timeInForce": "GTC",
+                "timeInForce": "GTX", # GTX ensures 100% Post Only (Maker) on Binance Futures
                 "reduceOnly": "true"
             }
         else:
@@ -210,6 +210,19 @@ def handle_order_update(event: dict):
         
         logger.info(f"[ORDER_UPDATE] {symbol} orderId={order_id} side={order_side} status={status}")
         
+        # Check if this order relates to a pending algo entry, map its ID in DB
+        if symbol in pending_algo_entries:
+            config = pending_algo_entries[symbol]
+            entry_side = "BUY" if config["close_side"] == "SELL" else "SELL"
+            if order_side == entry_side:
+                algo_id = config.get("algo_id")
+                if algo_id:
+                    logger.info(f"[MAPPING] Mapping algoId {algo_id} to real orderId {order_id} for {symbol}")
+                    # Replace algo_id with true order_id so subsequent updates work properly
+                    update_trade({"entry_order_id": algo_id}, {"entry_order_id": order_id})
+                    # Nullify to prevent redundant mapping on next updates (e.g. PARTIALLY_FILLED -> FILLED)
+                    config["algo_id"] = None
+
         # Update trade status in DB for visibility
         update_trade({"entry_order_id": order_id}, {"status": status})
         
@@ -229,8 +242,41 @@ def handle_order_update(event: dict):
                 entry_side = "BUY" if config["close_side"] == "SELL" else "SELL"
                 
                 if order_side == entry_side:
-                    logger.info(f"[FILL] Algo entry FILLED for {symbol} (orderId={order_id}, side={order_side}). Placing TP/SL.")
-                    _place_tp_sl(order_id, config)
+                    # Hitung TP/SL dari ACTUAL FILL PRICE, bukan entry signal
+                    # Field 'ap' = average price (fill price) dari Binance ORDER_TRADE_UPDATE
+                    fill_price = float(order.get("ap", 0))
+                    if fill_price <= 0:
+                        # Fallback: pakai last filled price jika ap tidak tersedia
+                        fill_price = float(order.get("L", 0))
+                    
+                    if fill_price > 0:
+                        is_long = config.get("is_long", True)
+                        tp_pct = config.get("tp_percent", 0)
+                        sl_pct = config.get("sl_percent", 0)
+                        
+                        tp_price_raw = fill_price * (1 + tp_pct / 100) if is_long else fill_price * (1 - tp_pct / 100)
+                        sl_price_raw = fill_price * (1 - sl_pct / 100) if is_long else fill_price * (1 + sl_pct / 100)
+                        
+                        tick_size, _ = get_symbol_filters(symbol)
+                        tp_price = round_tick_size(tp_price_raw, tick_size)
+                        sl_price = round_tick_size(sl_price_raw, tick_size)
+                        
+                        logger.info(f"[FILL] Algo entry FILLED for {symbol} (orderId={order_id}, fillPrice={fill_price}). TP={tp_price}, SL={sl_price}")
+                        
+                        # Build resolved config with actual prices for _place_tp_sl
+                        resolved_config = {
+                            "symbol": symbol,
+                            "close_side": config["close_side"],
+                            "quantity": config["quantity"],
+                            "tp_price": tp_price,
+                            "sl_price": sl_price,
+                            "tp_type": config.get("tp_type", "LIMIT"),
+                            "sl_type": config.get("sl_type", "STOP_MARKET"),
+                        }
+                        _place_tp_sl(order_id, resolved_config)
+                    else:
+                        logger.error(f"[FILL] Algo entry FILLED for {symbol} but fill price is 0. Cannot place TP/SL.")
+                    
                     del pending_algo_entries[symbol]
                     return
                 else:

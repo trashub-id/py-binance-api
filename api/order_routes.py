@@ -7,7 +7,7 @@ from config.settings import WEBHOOK_SECRET
 from core.binance_client import rest_client, get_symbol_filters, new_algo_order
 from core.precision import round_tick_size
 from execution.order_helpers import get_quantity_and_leverage, clean_symbol
-from database.supabase_logger import get_last_wallet_entry, update_signal, remove_signal
+from database.supabase_logger import get_last_wallet_entry, update_signal, remove_signal, log_trade
 from execution.order_manager import pending_entries, pending_algo_entries
 
 logger = logging.getLogger(__name__)
@@ -114,6 +114,18 @@ async def place_order(payload: PlaceOrderRequest):
         entry_order = rest_client.new_order(**entry_params)
         entry_order_id = str(entry_order.get("orderId"))
 
+        trade_data = {
+            "entry_order_id": entry_order_id,
+            "symbol": symbol,
+            "side": side,
+            "quantity": ql["quantity"],
+            "entry_price": float(payload.entry) if payload.entry else 0,
+            "order_type": payload.type_entry or "MARKET",
+            "status": entry_order.get("status", "NEW"),
+            "payload": payload.model_dump()
+        }
+        log_trade(trade_data)
+
         # Simpan TP di pending_entries → WebSocket akan pasang saat entry FILLED
         # (reduceOnly LIMIT tidak bisa dipasang sebelum ada posisi)
         tick_size, _ = get_symbol_filters(symbol)
@@ -183,8 +195,6 @@ async def place_stop_auto(payload: StopAutoRequest):
 
     is_long = payload.positionSide == "LONG"
     sl_price_num = entry_num * (1 - sl_percent_num / 100) if is_long else entry_num * (1 + sl_percent_num / 100)
-    tp_price_num = entry_num * (1 + tp_percent_num / 100) if is_long else entry_num * (1 - tp_percent_num / 100)
-    
     sl_price_str = str(sl_price_num)
 
     # Tentukan side berdasarkan positionSide dari payload
@@ -232,19 +242,30 @@ async def place_stop_auto(payload: StopAutoRequest):
         algo_id = str(entry_order.get("algoId", ""))
         logger.info(f"[STOP-AUTO] Algo entry placed: algoId={algo_id}, symbol={symbol}, side={side}")
         
-        tick_size, _ = get_symbol_filters(symbol)
-        tp_price_rounded = round_tick_size(tp_price_num, tick_size)
-        sl_price_rounded = round_tick_size(sl_price_num, tick_size)
-
+        trade_data = {
+            "entry_order_id": algo_id,
+            "symbol": symbol,
+            "side": side,
+            "quantity": ql["quantity"],
+            "entry_price": float(payload.entry) if payload.entry else 0,
+            "order_type": "STOP_MARKET",
+            "status": entry_order.get("algoStatus", "NEW"),
+            "payload": payload.model_dump()
+        }
+        log_trade(trade_data)
+        
         # Simpan di memory BY SYMBOL agar WebSocket bisa pasang TP/SL saat FILLED
+        # TP/SL dihitung dari FILL PRICE (bukan entry signal) karena signal hanya kirim persen
         # (Algo orders return algoId, but ORDER_TRADE_UPDATE fires with a different orderId)
         pending_algo_entries[symbol] = {
+            "algo_id": algo_id,
             "symbol": symbol,
             "close_side": close_side,
             "quantity": ql["quantity"],
-            "tp_price": tp_price_rounded,
-            "sl_price": sl_price_rounded,
-            "tp_type": "TAKE_PROFIT_MARKET",
+            "tp_percent": tp_percent_num,
+            "sl_percent": sl_percent_num,
+            "is_long": is_long,
+            "tp_type": "LIMIT",
             "sl_type": "STOP_MARKET"
         }
 
