@@ -209,12 +209,14 @@ def handle_order_update(event: dict):
         status = order.get("X")
         symbol = order.get("s")
         order_side = order.get("S")  # BUY or SELL
+        position_side = order.get("ps", "")
+        algo_key = f"{symbol}_{position_side}"
         
-        logger.info(f"[ORDER_UPDATE] {symbol} orderId={order_id} side={order_side} status={status}")
+        logger.info(f"[ORDER_UPDATE] {symbol} orderId={order_id} side={order_side} ps={position_side} status={status}")
         
         # Check if this order relates to a pending algo entry, map its ID in DB
-        if symbol in pending_algo_entries:
-            config = pending_algo_entries[symbol]
+        if algo_key in pending_algo_entries:
+            config = pending_algo_entries[algo_key]
             entry_side = "BUY" if config["close_side"] == "SELL" else "SELL"
             if order_side == entry_side:
                 algo_id = config.get("algo_id")
@@ -238,8 +240,8 @@ def handle_order_update(event: dict):
                 return
 
             # === Strategy 2: symbol-based lookup (place-stop-auto / algo flow) ===
-            if symbol in pending_algo_entries:
-                config = pending_algo_entries[symbol]
+            if algo_key in pending_algo_entries:
+                config = pending_algo_entries[algo_key]
                 # Derive expected entry side from close_side
                 entry_side = "BUY" if config["close_side"] == "SELL" else "SELL"
                 
@@ -280,7 +282,7 @@ def handle_order_update(event: dict):
                     else:
                         logger.error(f"[FILL] Algo entry FILLED for {symbol} but fill price is 0. Cannot place TP/SL.")
                     
-                    del pending_algo_entries[symbol]
+                    del pending_algo_entries[algo_key]
                     return
                 else:
                     logger.debug(f"[FILL] {symbol} FILLED but side={order_side} != entry_side={entry_side}. Skipping.")
@@ -310,12 +312,14 @@ def handle_strategy_update(event: dict):
         status = strategy.get("ss", "")
         algo_id = strategy.get("si", "")
         strategy_type = strategy.get("st", "")
+        position_side = strategy.get("ps", "")
+        algo_key = f"{symbol}_{position_side}"
 
-        logger.info(f"[STRATEGY_UPDATE] {symbol} algoId={algo_id} type={strategy_type} status={status}")
+        logger.info(f"[STRATEGY_UPDATE] {symbol} algoId={algo_id} type={strategy_type} ps={position_side} status={status}")
 
-        if status in ["CANCELLED", "EXPIRED"] and symbol in pending_algo_entries:
-            logger.info(f"[STRATEGY] Algo entry for {symbol} {status}. Removing from pending_algo_entries.")
-            del pending_algo_entries[symbol]
+        if status in ["CANCELLED", "EXPIRED"] and algo_key in pending_algo_entries:
+            logger.info(f"[STRATEGY] Algo entry for {symbol} ({position_side}) {status}. Removing from pending_algo_entries.")
+            del pending_algo_entries[algo_key]
 
     except Exception as e:
         log_error("handle_strategy_update", e, event)

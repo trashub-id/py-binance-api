@@ -265,7 +265,8 @@ async def place_stop_auto(payload: StopAutoRequest):
         # Simpan di memory BY SYMBOL agar WebSocket bisa pasang TP/SL saat FILLED
         # TP/SL dihitung dari FILL PRICE (bukan entry signal) karena signal hanya kirim persen
         # (Algo orders return algoId, but ORDER_TRADE_UPDATE fires with a different orderId)
-        pending_algo_entries[symbol] = {
+        algo_key = f"{symbol}_{payload.positionSide}"
+        pending_algo_entries[algo_key] = {
             "algo_id": algo_id,
             "symbol": symbol,
             "position_side": payload.positionSide,
