@@ -2,6 +2,7 @@ import asyncio
 import logging
 from core.state import order_queue
 from execution.order_manager import process_webhook_payload
+from database.supabase_logger import log_error
 
 logger = logging.getLogger(__name__)
 
@@ -15,5 +16,6 @@ async def order_worker():
             await asyncio.to_thread(process_webhook_payload, payload)
         except Exception as e:
             logger.error(f"Order worker error: {str(e)}")
+            log_error("order_worker", e)
         finally:
             order_queue.task_done()

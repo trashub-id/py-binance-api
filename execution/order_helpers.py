@@ -1,6 +1,7 @@
 import math
 import logging
 from core.binance_client import rest_client, get_exchange_info
+from database.supabase_logger import log_error
 
 logger = logging.getLogger(__name__)
 
@@ -170,5 +171,6 @@ def cancel_position_by_side(symbol: str, position_side: str) -> list:
                 logger.info(f"[CLEAN] Closed position for {symbol} ({position_side}), amt: {amt}")
             except Exception as e:
                 logger.error(f"Failed to close position for {symbol} ({position_side}): {str(e)}")
+                log_error("close_position", e, {"symbol": symbol, "position_side": position_side})
                 raise e
     return close_orders

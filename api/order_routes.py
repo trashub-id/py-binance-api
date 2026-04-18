@@ -7,7 +7,7 @@ from config.settings import WEBHOOK_SECRET
 from core.binance_client import rest_client, get_symbol_filters, new_algo_order
 from core.precision import round_tick_size
 from execution.order_helpers import get_quantity_and_leverage, clean_symbol
-from database.supabase_logger import get_last_wallet_entry, update_signal, remove_signal, log_trade
+from database.supabase_logger import get_last_wallet_entry, update_signal, remove_signal, log_trade, log_error
 from execution.order_manager import pending_entries, pending_algo_entries
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,7 @@ async def place_order(payload: PlaceOrderRequest):
             return {"status": "success", "message": "Canceled"}
         except Exception as e:
             logger.error(f"Error triggering cancel: {str(e)}")
+            log_error("place_order_cancel", e, {"symbol": symbol, "positionSide": payload.positionSide})
             raise HTTPException(status_code=500, detail=str(e))
 
     if payload.type != "trigger_order":
@@ -166,6 +167,7 @@ async def place_order(payload: PlaceOrderRequest):
 
     except Exception as e:
         logger.error(f"Place order error: {str(e)}")
+        log_error("place_order", e, {"symbol": symbol, "side": side})
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/place-stop-auto")
@@ -185,6 +187,7 @@ async def place_stop_auto(payload: StopAutoRequest):
             return {"status": "success", "message": "Canceled"}
         except Exception as e:
             logger.error(f"Error triggering cancel: {str(e)}")
+            log_error("stop_auto_cancel", e, {"symbol": symbol, "positionSide": payload.positionSide})
             raise HTTPException(status_code=500, detail=str(e))
 
     if payload.type != "trigger_order":
@@ -293,4 +296,5 @@ async def place_stop_auto(payload: StopAutoRequest):
 
     except Exception as e:
         logger.error(f"Place stop auto error: {str(e)}")
+        log_error("place_stop_auto", e, {"symbol": symbol, "side": side})
         raise HTTPException(status_code=500, detail=str(e))

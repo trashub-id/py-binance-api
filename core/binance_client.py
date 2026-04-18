@@ -2,6 +2,7 @@ import logging
 from binance.um_futures import UMFutures
 from binance.websocket.um_futures.websocket_client import UMFuturesWebsocketClient
 from config.settings import BINANCE_API_KEY, BINANCE_API_SECRET, IS_TESTNET
+from database.supabase_logger import log_error as _log_error
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ def get_exchange_info() -> dict:
             logger.info("Fetched exchange_info successfully.")
         except Exception as e:
             logger.error(f"Failed to fetch exchange_info: {str(e)}")
+            _log_error("fetch_exchange_info", e)
             raise e
     return _exchange_info_cache
 
@@ -57,6 +59,7 @@ def get_listen_key() -> str:
         return response["listenKey"]
     except Exception as e:
         logger.error(f"Failed to create listen key: {str(e)}")
+        _log_error("create_listen_key", e)
         raise e
 
 def keepalive_listen_key(listen_key: str):
@@ -66,6 +69,8 @@ def keepalive_listen_key(listen_key: str):
         logger.debug(f"Renewed listen key: {listen_key}")
     except Exception as e:
         logger.error(f"Failed to renew listen key: {str(e)}")
+        _log_error("renew_listen_key", e, {"listen_key": listen_key[:8] + "..." if listen_key else None})
+        raise
 
 def new_algo_order(**params) -> dict:
     """
@@ -78,5 +83,6 @@ def new_algo_order(**params) -> dict:
         return response
     except Exception as e:
         logger.error(f"Failed to place algo order: {str(e)}")
+        _log_error("place_algo_order", e, params)
         raise e
 
