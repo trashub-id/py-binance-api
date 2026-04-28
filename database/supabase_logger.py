@@ -114,3 +114,99 @@ def remove_signal(symbol: str):
         supabase.table("signals").delete().eq("symbol", symbol).execute()
     except Exception as e:
         logger.error(f"Failed to remove signal for {symbol}: {str(e)}")
+
+def save_pending_order(data: dict):
+    """
+    Inserts a pending order into the pending_orders table.
+    """
+    try:
+        if not supabase:
+            return
+        supabase.table("pending_orders").insert(data).execute()
+    except Exception as e:
+        logger.error(f"Failed to save pending order: {str(e)}")
+
+def update_pending_order(match_criteria: dict, update_data: dict):
+    """
+    Updates a pending order in the pending_orders table.
+    """
+    try:
+        if not supabase:
+            return
+        update_data["updated_at"] = "now()"
+        builder = supabase.table("pending_orders").update(update_data)
+        for key, value in match_criteria.items():
+            builder = builder.eq(key, value)
+        builder.execute()
+    except Exception as e:
+        logger.error(f"Failed to update pending order: {str(e)}")
+
+def claim_pending_order(match_criteria: dict) -> bool:
+    """
+    Atomically claims a pending order by setting status to 'PROCESSING'.
+    Only succeeds if the current status is 'PENDING'.
+    Returns True if the claim was successful (row was updated), False otherwise.
+    This prevents race conditions between WebSocket handler and reconciliation worker.
+    """
+    try:
+        if not supabase:
+            return False
+        builder = supabase.table("pending_orders").update(
+            {"status": "PROCESSING", "updated_at": "now()"}
+        )
+        for key, value in match_criteria.items():
+            builder = builder.eq(key, value)
+        # Only claim if still PENDING — atomic guard against double processing
+        builder = builder.eq("status", "PENDING")
+        res = builder.execute()
+        # If no rows were updated, another process already claimed it
+        return bool(res.data)
+    except Exception as e:
+        logger.error(f"Failed to claim pending order: {str(e)}")
+        return False
+
+def delete_pending_algo_order(symbol: str, position_side: str):
+    """
+    Deletes a pending algo order.
+    """
+    try:
+        if not supabase:
+            return
+        supabase.table("pending_orders").delete().eq("symbol", symbol).eq("position_side", position_side).eq("flow_type", "algo").execute()
+    except Exception as e:
+        logger.error(f"Failed to delete pending algo order {symbol} {position_side}: {str(e)}")
+
+def get_all_pending_orders() -> list:
+    """
+    Fetches all pending orders with status 'PENDING'.
+    """
+    try:
+        if not supabase:
+            return []
+        res = supabase.table("pending_orders").select("*").eq("status", "PENDING").execute()
+        return res.data if res.data else []
+    except Exception as e:
+        logger.error(f"Failed to fetch pending orders: {str(e)}")
+        return []
+
+def cleanup_stale_pending_orders():
+    """
+    Deletes pending_orders records that are no longer PENDING and older than 24 hours.
+    Prevents DB bloat from accumulating completed/cancelled records.
+    """
+    try:
+        if not supabase:
+            return 0
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        res = supabase.table("pending_orders").delete() \
+            .neq("status", "PENDING") \
+            .lt("updated_at", cutoff) \
+            .execute()
+        count = len(res.data) if res.data else 0
+        if count > 0:
+            logger.info(f"Cleaned up {count} stale pending_orders records.")
+        return count
+    except Exception as e:
+        logger.error(f"Failed to cleanup stale pending orders: {str(e)}")
+        return 0

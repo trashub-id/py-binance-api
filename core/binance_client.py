@@ -1,4 +1,5 @@
 import logging
+import time
 from binance.um_futures import UMFutures
 from binance.websocket.um_futures.websocket_client import UMFuturesWebsocketClient
 from config.settings import BINANCE_API_KEY, BINANCE_API_SECRET, IS_TESTNET
@@ -18,13 +19,18 @@ ws_client = None
 
 # Cache for exchange_info
 _exchange_info_cache = None
+_exchange_info_last_update = 0
+CACHE_TTL = 86400 # 24 hours
 
 def get_exchange_info() -> dict:
     """Fetch and cache exchange info to avoid repeating API calls."""
-    global _exchange_info_cache
-    if not _exchange_info_cache:
+    global _exchange_info_cache, _exchange_info_last_update
+    current_time = time.time()
+    
+    if not _exchange_info_cache or (current_time - _exchange_info_last_update) > CACHE_TTL:
         try:
             _exchange_info_cache = rest_client.exchange_info()
+            _exchange_info_last_update = current_time
             logger.info("Fetched exchange_info successfully.")
         except Exception as e:
             logger.error(f"Failed to fetch exchange_info: {str(e)}")

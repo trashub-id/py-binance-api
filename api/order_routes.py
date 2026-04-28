@@ -7,7 +7,7 @@ from config.settings import WEBHOOK_SECRET
 from core.binance_client import rest_client, get_symbol_filters, new_algo_order
 from core.precision import round_tick_size
 from execution.order_helpers import get_quantity_and_leverage, clean_symbol
-from database.supabase_logger import get_last_wallet_entry, update_signal, remove_signal, log_trade, log_error
+from database.supabase_logger import get_last_wallet_entry, update_signal, remove_signal, log_trade, log_error, save_pending_order, delete_pending_algo_order
 from execution.order_manager import pending_entries, pending_algo_entries
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ async def place_order(payload: PlaceOrderRequest):
             clean_symbol(symbol, payload.positionSide)
             logger.info(f"[TP CANCEL ✅] {symbol} {payload.positionSide} orders & positions cleaned")
             remove_signal(symbol)
+            delete_pending_algo_order(symbol, payload.positionSide)
             return {"status": "success", "message": "Canceled"}
         except Exception as e:
             logger.error(f"Error triggering cancel: {str(e)}")
@@ -135,15 +136,22 @@ async def place_order(payload: PlaceOrderRequest):
         tick_size, _ = get_symbol_filters(symbol)
         tp_price_rounded = round_tick_size(float(payload.tp), tick_size)
 
-        pending_entries[entry_order_id] = {
+        pending_config = {
             "symbol": symbol,
             "position_side": payload.positionSide,
             "close_side": close_side,
             "quantity": ql["quantity"],
-            "tp_price": tp_price_rounded,
+            "tp_price": str(tp_price_rounded),
             "tp_type": "LIMIT",
             # sl_price tidak diisi karena SL sudah dipasang langsung di bawah
         }
+        pending_entries[entry_order_id] = pending_config
+        
+        # Save to supabase
+        supabase_data = pending_config.copy()
+        supabase_data["entry_order_id"] = entry_order_id
+        supabase_data["flow_type"] = "regular"
+        save_pending_order(supabase_data)
 
         # Stop Loss Order via Algo Order API (langsung, tidak perlu tunggu FILL)
         sl_params = {
@@ -184,6 +192,7 @@ async def place_stop_auto(payload: StopAutoRequest):
             clean_symbol(symbol, payload.positionSide)
             logger.info(f"[STOP-AUTO CANCEL ✅] {symbol} {payload.positionSide} orders & positions cleaned")
             remove_signal(symbol)
+            delete_pending_algo_order(symbol, payload.positionSide)
             return {"status": "success", "message": "Canceled"}
         except Exception as e:
             logger.error(f"Error triggering cancel: {str(e)}")
@@ -269,7 +278,7 @@ async def place_stop_auto(payload: StopAutoRequest):
         # TP/SL dihitung dari FILL PRICE (bukan entry signal) karena signal hanya kirim persen
         # (Algo orders return algoId, but ORDER_TRADE_UPDATE fires with a different orderId)
         algo_key = f"{symbol}_{payload.positionSide}"
-        pending_algo_entries[algo_key] = {
+        pending_config = {
             "algo_id": algo_id,
             "symbol": symbol,
             "position_side": payload.positionSide,
@@ -281,6 +290,13 @@ async def place_stop_auto(payload: StopAutoRequest):
             "tp_type": "LIMIT",
             "sl_type": "STOP_MARKET"
         }
+        pending_algo_entries[algo_key] = pending_config
+        
+        # Save to supabase
+        supabase_data = pending_config.copy()
+        supabase_data["entry_order_id"] = algo_id # Use algo_id as placeholder
+        supabase_data["flow_type"] = "algo"
+        save_pending_order(supabase_data)
 
         update_signal({
             "symbol": symbol,

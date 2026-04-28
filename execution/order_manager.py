@@ -1,8 +1,7 @@
 import logging
 from core.binance_client import rest_client, get_symbol_filters, new_algo_order
-from core.precision import round_step_size, round_tick_size
-from core.converter import extract_order_params, WebhookPayload, CancelPayload
-from database.supabase_logger import log_error, log_trade, update_trade
+from core.precision import round_tick_size
+from database.supabase_logger import log_error, update_trade, get_all_pending_orders, update_pending_order, claim_pending_order
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +13,38 @@ pending_entries = {}
 # so we match by symbol + side instead.
 pending_algo_entries = {}
 
+def load_pending_orders_on_boot():
+    """Load pending orders from Supabase into memory."""
+    try:
+        orders = get_all_pending_orders()
+        for order in orders:
+            flow_type = order.get("flow_type", "regular")
+            if flow_type == "regular":
+                pending_entries[order["entry_order_id"]] = {
+                    "symbol": order["symbol"],
+                    "position_side": order["position_side"],
+                    "close_side": order["close_side"],
+                    "quantity": order["quantity"],
+                    "tp_price": order["tp_price"],
+                    "tp_type": order.get("tp_type", "LIMIT"),
+                }
+            elif flow_type == "algo":
+                algo_key = f"{order['symbol']}_{order['position_side']}"
+                pending_algo_entries[algo_key] = {
+                    "algo_id": order["entry_order_id"],
+                    "symbol": order["symbol"],
+                    "position_side": order["position_side"],
+                    "close_side": order["close_side"],
+                    "quantity": order["quantity"],
+                    "tp_percent": order["tp_percent"],
+                    "sl_percent": order["sl_percent"],
+                    "is_long": order["is_long"],
+                    "tp_type": order.get("tp_type", "LIMIT"),
+                    "sl_type": order.get("sl_type", "STOP_MARKET"),
+                }
+        logger.info(f"Loaded {len(orders)} pending orders from DB.")
+    except Exception as e:
+        logger.error(f"Failed to load pending orders on boot: {str(e)}")
 
 def _place_tp_sl(entry_id: str, config: dict):
     """
@@ -84,112 +115,6 @@ def _place_tp_sl(entry_id: str, config: dict):
             logger.error(f"Failed to place SL order: {str(e)}")
 
 
-def process_webhook_payload(payload: WebhookPayload):
-    """
-    Processes the incoming webhook payload:
-    1. Fetches precision rules
-    2. Rounds quantities and prices
-    3. Sends Entry order
-    4. Saves state for TP/SL execution
-    """
-    symbol = payload.symbol.upper()
-    try:
-        tick_size, step_size = get_symbol_filters(symbol)
-        
-        # Calculate precise quantities and prices
-        qty = round_step_size(payload.quantity, step_size)
-        entry_price = round_tick_size(payload.entry.price, tick_size)
-        
-        # Prepare entry parameters
-        entry_params = {
-            "symbol": symbol,
-            "side": payload.side.upper(),
-            "quantity": qty,
-            "price": entry_price,
-        }
-        
-        # Add converted order type params (like type, timeInForce)
-        entry_params.update(extract_order_params(payload.entry.type))
-        
-        logger.info(f"Sending Entry Order: {entry_params}")
-        
-        # Send REST order
-        response = rest_client.new_order(**entry_params)
-        
-        order_id = str(response["orderId"])
-        status = response.get("status", "NEW")
-        
-        # Store pending TP/SL calculations in memory
-        tp_price = round_tick_size(payload.tp.price, tick_size)
-        sl_price = round_tick_size(payload.sl.price, tick_size)
-        close_side = "SELL" if payload.side.upper() == "BUY" else "BUY"
-        
-        pending_entries[order_id] = {
-            "symbol": symbol,
-            "close_side": close_side,
-            "quantity": qty,
-            "tp_price": tp_price,
-            "sl_price": sl_price,
-            "tp_type": payload.tp.type.upper(),
-            "sl_type": payload.sl.type.upper()
-        }
-        
-        # Log to Supabase trades
-        trade_data = {
-            "entry_order_id": order_id,
-            "symbol": symbol,
-            "side": payload.side.upper(),
-            "quantity": qty,
-            "entry_price": entry_price,
-            "order_type": payload.entry.type.upper(),
-            "status": status,
-            "payload": payload.model_dump()
-        }
-        log_trade(trade_data)
-        
-        return response
-        
-    except Exception as e:
-        context = f"process_webhook_payload_{symbol}"
-        log_error(context, e, payload.model_dump())
-        logger.error(f"Failed to process webhook: {str(e)}")
-        raise e
-
-def process_cancel_payload(payload: CancelPayload):
-    """
-    Processes incoming cancel payload to explicitly cancel pending limits.
-    """
-    symbol = payload.symbol.upper()
-    try:
-        logger.info(f"Processing Cancel Request for {symbol}: {payload.model_dump()}")
-        
-        if payload.cancel_all:
-            response = rest_client.cancel_open_orders(symbol=symbol)
-            # Cleanup internal tracking state
-            keys_to_delete = [k for k, v in pending_entries.items() if v["symbol"] == symbol]
-            for k in keys_to_delete:
-                del pending_entries[k]
-            # Also cleanup algo entries
-            if symbol in pending_algo_entries:
-                del pending_algo_entries[symbol]
-            logger.info(f"Canceled ALL open orders for {symbol}")
-            return {"status": "success", "message": f"Canceled all orders for {symbol}"}
-            
-        elif payload.order_id:
-            response = rest_client.cancel_order(symbol=symbol, orderId=int(payload.order_id))
-            if payload.order_id in pending_entries:
-                del pending_entries[payload.order_id]
-            logger.info(f"Canceled specific order {payload.order_id} for {symbol}")
-            return {"status": "success", "message": f"Canceled order {payload.order_id}"}
-            
-        else:
-            raise ValueError("Must provide either 'cancel_all=True' or 'order_id'")
-            
-    except Exception as e:
-        context = f"process_cancel_payload_{symbol}"
-        log_error(context, e, payload.model_dump())
-        logger.error(f"Failed to process cancel payload: {str(e)}")
-        raise e
 
 def handle_order_update(event: dict):
     """
@@ -233,10 +158,17 @@ def handle_order_update(event: dict):
         if status == "FILLED":
             # === Strategy 1: orderId-based lookup (place-order flow) ===
             if order_id in pending_entries:
+                # Atomically claim to prevent reconciliation worker from double-placing
+                if not claim_pending_order({"entry_order_id": order_id}):
+                    logger.info(f"[FILL] Entry {order_id} already claimed by another process. Skipping.")
+                    del pending_entries[order_id]
+                    return
+                
                 config = pending_entries[order_id]
                 logger.info(f"[FILL] Entry {order_id} FILLED (orderId match). Placing TP/SL for {config['symbol']}")
                 _place_tp_sl(order_id, config)
                 del pending_entries[order_id]
+                update_pending_order({"entry_order_id": order_id}, {"status": "FILLED"})
                 return
 
             # === Strategy 2: symbol-based lookup (place-stop-auto / algo flow) ===
@@ -246,6 +178,15 @@ def handle_order_update(event: dict):
                 entry_side = "BUY" if config["close_side"] == "SELL" else "SELL"
                 
                 if order_side == entry_side:
+                    # Atomically claim to prevent reconciliation worker from double-placing
+                    if not claim_pending_order({"entry_order_id": order_id}):
+                        # Try claiming by the original algo_id (before mapping)
+                        original_algo_id = config.get("algo_id")
+                        if original_algo_id and not claim_pending_order({"entry_order_id": original_algo_id}):
+                            logger.info(f"[FILL] Algo entry for {symbol} already claimed by another process. Skipping.")
+                            del pending_algo_entries[algo_key]
+                            return
+                    
                     # Hitung TP/SL dari ACTUAL FILL PRICE, bukan entry signal
                     # Field 'ap' = average price (fill price) dari Binance ORDER_TRADE_UPDATE
                     fill_price = float(order.get("ap", 0))
@@ -283,6 +224,8 @@ def handle_order_update(event: dict):
                         logger.error(f"[FILL] Algo entry FILLED for {symbol} but fill price is 0. Cannot place TP/SL.")
                     
                     del pending_algo_entries[algo_key]
+                    # Use entry_order_id instead of composite key to avoid ambiguous matching
+                    update_pending_order({"entry_order_id": order_id}, {"status": "FILLED"})
                     return
                 else:
                     logger.debug(f"[FILL] {symbol} FILLED but side={order_side} != entry_side={entry_side}. Skipping.")
@@ -291,6 +234,7 @@ def handle_order_update(event: dict):
             if order_id in pending_entries:
                 logger.info(f"Entry {order_id} {status}. Removing from pending_entries.")
                 del pending_entries[order_id]
+                update_pending_order({"entry_order_id": order_id}, {"status": status})
             
     except Exception as e:
         log_error("handle_order_update", e, event)
@@ -318,8 +262,11 @@ def handle_strategy_update(event: dict):
         logger.info(f"[STRATEGY_UPDATE] {symbol} algoId={algo_id} type={strategy_type} ps={position_side} status={status}")
 
         if status in ["CANCELLED", "EXPIRED"] and algo_key in pending_algo_entries:
+            config = pending_algo_entries[algo_key]
             logger.info(f"[STRATEGY] Algo entry for {symbol} ({position_side}) {status}. Removing from pending_algo_entries.")
             del pending_algo_entries[algo_key]
+            # Use entry_order_id (algoId) for precise matching instead of composite key
+            update_pending_order({"entry_order_id": str(algo_id)}, {"status": status})
 
     except Exception as e:
         log_error("handle_strategy_update", e, event)

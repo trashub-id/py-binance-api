@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import json
+import time
 from binance.websocket.um_futures.websocket_client import UMFuturesWebsocketClient
 from core.binance_client import WS_URL, get_listen_key, keepalive_listen_key
-from execution.order_manager import handle_order_update, handle_strategy_update
+from execution.order_manager import handle_order_update, handle_strategy_update, pending_entries, pending_algo_entries
 from database.supabase_logger import log_error
 
 logger = logging.getLogger(__name__)
@@ -16,15 +17,20 @@ ws_client = None
 MAX_RECONNECT_RETRIES = 10
 INITIAL_BACKOFF_SECONDS = 3
 KEEPALIVE_INTERVAL_SECONDS = 50 * 60  # 50 minutes (key valid 60 min)
+HEALTH_CHECK_INTERVAL_SECONDS = 10 * 60  # 10 minutes
 
 # Control flags
 _shutting_down = False
 _reconnecting = False  # Prevent concurrent reconnects
 _event_loop = None  # Reference to the main event loop
+_last_message_time = 0  # Tracks last WS message for health check
 
 
 def on_ws_message(_, message):
     """Callback for WebSocket events."""
+    global _last_message_time
+    _last_message_time = time.time()
+    
     try:
         data = json.loads(message)
         event_type = data.get("e")
@@ -115,6 +121,10 @@ async def _reconnect_websocket():
                 ws_client.user_data(listen_key=listen_key)
                 
                 logger.info(f"WebSocket reconnected successfully on attempt {attempt + 1}.")
+                _last_message_time = time.time()  # Reset health check timer
+                if pending_entries or pending_algo_entries:
+                    logger.warning(f"Reconnected with {len(pending_entries)} pending regular and {len(pending_algo_entries)} pending algo orders. Reconciliation worker will handle missed fills.")
+                
                 log_error("ws_reconnect_success", 
                           Exception(f"Reconnected on attempt {attempt + 1}"),
                           {"attempt": attempt + 1})
@@ -134,13 +144,24 @@ async def _reconnect_websocket():
 
 
 async def keepalive_loop():
-    """Periodic task to ping the Binance API and renew the listenKey."""
+    """Periodic task to ping the Binance API, renew the listenKey, and check WS health."""
     global listen_key
     while not _shutting_down:
         await asyncio.sleep(KEEPALIVE_INTERVAL_SECONDS)
         
         if _shutting_down:
             break
+        
+        # Health check: detect silent WebSocket disconnects
+        if _last_message_time > 0:
+            silence_duration = time.time() - _last_message_time
+            if silence_duration > HEALTH_CHECK_INTERVAL_SECONDS:
+                logger.warning(f"No WebSocket message received for {silence_duration:.0f}s. Triggering reconnect...")
+                log_error("ws_silent_disconnect", 
+                          Exception(f"No WS message for {silence_duration:.0f}s"),
+                          {"last_message_age_seconds": round(silence_duration)})
+                await _reconnect_websocket()
+                continue
             
         try:
             logger.info("Renewing listenKey...")
@@ -157,7 +178,7 @@ async def keepalive_loop():
 
 async def boot_websocket_listener():
     """Start the websocket client and its keepalive loop."""
-    global listen_key, ws_client, _event_loop, _shutting_down
+    global listen_key, ws_client, _event_loop, _shutting_down, _last_message_time
     _shutting_down = False
     
     try:
@@ -174,9 +195,10 @@ async def boot_websocket_listener():
             on_close=on_ws_close
         )
         ws_client.user_data(listen_key=listen_key)
+        _last_message_time = time.time()  # Initialize health check timer
         logger.info("User Data Stream WebSocket started.")
         
-        # Setup listenKey periodic Keep-Alive
+        # Setup listenKey periodic Keep-Alive + health check
         asyncio.create_task(keepalive_loop())
     except Exception as e:
         logger.error(f"Failed to boot WebSocket listener: {str(e)}")
