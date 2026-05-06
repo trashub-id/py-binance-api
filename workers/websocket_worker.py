@@ -17,7 +17,7 @@ ws_client = None
 MAX_RECONNECT_RETRIES = 10
 INITIAL_BACKOFF_SECONDS = 3
 KEEPALIVE_INTERVAL_SECONDS = 50 * 60  # 50 minutes (key valid 60 min)
-HEALTH_CHECK_INTERVAL_SECONDS = 10 * 60  # 10 minutes
+HEALTH_CHECK_INTERVAL_SECONDS = 5 * 60  # 5 minutes (was 10, reduced for faster detection)
 
 # Control flags
 _shutting_down = False
@@ -144,24 +144,13 @@ async def _reconnect_websocket():
 
 
 async def keepalive_loop():
-    """Periodic task to ping the Binance API, renew the listenKey, and check WS health."""
+    """Periodic task to renew the listenKey."""
     global listen_key
     while not _shutting_down:
         await asyncio.sleep(KEEPALIVE_INTERVAL_SECONDS)
         
         if _shutting_down:
             break
-        
-        # Health check: detect silent WebSocket disconnects
-        if _last_message_time > 0:
-            silence_duration = time.time() - _last_message_time
-            if silence_duration > HEALTH_CHECK_INTERVAL_SECONDS:
-                logger.warning(f"No WebSocket message received for {silence_duration:.0f}s. Triggering reconnect...")
-                log_error("ws_silent_disconnect", 
-                          Exception(f"No WS message for {silence_duration:.0f}s"),
-                          {"last_message_age_seconds": round(silence_duration)})
-                await _reconnect_websocket()
-                continue
             
         try:
             logger.info("Renewing listenKey...")
@@ -176,8 +165,38 @@ async def keepalive_loop():
             await _reconnect_websocket()
 
 
+async def health_check_loop():
+    """
+    Separate health check loop that runs more frequently than keepalive.
+    Detects silent WebSocket disconnects and logs pending order counts for visibility.
+    """
+    while not _shutting_down:
+        await asyncio.sleep(HEALTH_CHECK_INTERVAL_SECONDS)
+        
+        if _shutting_down:
+            break
+        
+        # Log pending entries count for visibility
+        regular_count = len(pending_entries)
+        algo_count = len(pending_algo_entries)
+        if regular_count > 0 or algo_count > 0:
+            logger.info(f"[HEALTH] Pending entries: {regular_count} regular, {algo_count} algo")
+        
+        # Health check: detect silent WebSocket disconnects
+        if _last_message_time > 0:
+            silence_duration = time.time() - _last_message_time
+            if silence_duration > HEALTH_CHECK_INTERVAL_SECONDS:
+                logger.warning(f"No WebSocket message received for {silence_duration:.0f}s. Triggering reconnect...")
+                log_error("ws_silent_disconnect", 
+                          Exception(f"No WS message for {silence_duration:.0f}s"),
+                          {"last_message_age_seconds": round(silence_duration),
+                           "pending_regular": regular_count,
+                           "pending_algo": algo_count})
+                await _reconnect_websocket()
+
+
 async def boot_websocket_listener():
-    """Start the websocket client and its keepalive loop."""
+    """Start the websocket client and its keepalive + health check loops."""
     global listen_key, ws_client, _event_loop, _shutting_down, _last_message_time
     _shutting_down = False
     
@@ -198,8 +217,10 @@ async def boot_websocket_listener():
         _last_message_time = time.time()  # Initialize health check timer
         logger.info("User Data Stream WebSocket started.")
         
-        # Setup listenKey periodic Keep-Alive + health check
+        # Setup listenKey periodic Keep-Alive (every 50 min)
         asyncio.create_task(keepalive_loop())
+        # Setup separate health check (every 5 min) — faster detection of silent disconnects
+        asyncio.create_task(health_check_loop())
     except Exception as e:
         logger.error(f"Failed to boot WebSocket listener: {str(e)}")
         log_error("ws_boot_failed", e)
@@ -210,3 +231,4 @@ def stop_websocket_listener():
     if ws_client:
         logger.info("Stopping WebSocket listener...")
         ws_client.stop()
+

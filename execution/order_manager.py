@@ -52,10 +52,13 @@ def _place_tp_sl(entry_id: str, config: dict):
     Extracted as helper to avoid duplication between orderId and symbol-based flows.
     """
     symbol = config["symbol"]
+    # Defensive: ensure quantity/prices are strings for Binance API
+    quantity_str = str(config["quantity"])
 
     # 1. Place TP (only if tp_price is configured)
     if config.get("tp_price"):
         tp_type = config.get("tp_type", "LIMIT")
+        tp_price_str = str(config["tp_price"])
 
         if tp_type == "LIMIT":
             tp_params = {
@@ -63,8 +66,8 @@ def _place_tp_sl(entry_id: str, config: dict):
                 "side": config["close_side"],
                 "positionSide": config.get("position_side"),
                 "type": "LIMIT",
-                "quantity": config["quantity"],
-                "price": config["tp_price"],
+                "quantity": quantity_str,
+                "price": tp_price_str,
                 "timeInForce": "GTX" # GTX ensures 100% Post Only (Maker) on Binance Futures
             }
         else:
@@ -75,8 +78,8 @@ def _place_tp_sl(entry_id: str, config: dict):
                 "side": config["close_side"],
                 "positionSide": config.get("position_side"),
                 "type": tp_type,
-                "triggerPrice": config["tp_price"],
-                "quantity": config["quantity"],
+                "triggerPrice": tp_price_str,
+                "quantity": quantity_str,
                 "priceProtect": "TRUE"
             }
 
@@ -94,14 +97,15 @@ def _place_tp_sl(entry_id: str, config: dict):
 
     # 2. Place SL (only if sl_price is configured)
     if config.get("sl_price"):
+        sl_price_str = str(config["sl_price"])
         sl_params = {
             "symbol": symbol,
             "algoType": "CONDITIONAL",
             "side": config["close_side"],
             "positionSide": config.get("position_side"),
             "type": "STOP_MARKET",
-            "quantity": config["quantity"],
-            "triggerPrice": config["sl_price"],
+            "quantity": quantity_str,
+            "triggerPrice": sl_price_str,
             "priceProtect": "TRUE"
         }
 
@@ -158,11 +162,12 @@ def handle_order_update(event: dict):
         if status == "FILLED":
             # === Strategy 1: orderId-based lookup (place-order flow) ===
             if order_id in pending_entries:
-                # Atomically claim to prevent reconciliation worker from double-placing
-                if not claim_pending_order({"entry_order_id": order_id}):
-                    logger.info(f"[FILL] Entry {order_id} already claimed by another process. Skipping.")
-                    del pending_entries[order_id]
-                    return
+                # Soft-guard: attempt to claim but ALWAYS proceed with TP/SL placement.
+                # claim_pending_order returns False both when "already claimed" AND "no DB record".
+                # We cannot distinguish the two, so we always place TP/SL from in-memory state.
+                claimed = claim_pending_order({"entry_order_id": order_id})
+                if not claimed:
+                    logger.warning(f"[FILL] Could not claim {order_id} in DB (record may not exist or already claimed). Proceeding with TP/SL anyway.")
                 
                 config = pending_entries[order_id]
                 logger.info(f"[FILL] Entry {order_id} FILLED (orderId match). Placing TP/SL for {config['symbol']}")
@@ -178,14 +183,15 @@ def handle_order_update(event: dict):
                 entry_side = "BUY" if config["close_side"] == "SELL" else "SELL"
                 
                 if order_side == entry_side:
-                    # Atomically claim to prevent reconciliation worker from double-placing
-                    if not claim_pending_order({"entry_order_id": order_id}):
-                        # Try claiming by the original algo_id (before mapping)
+                    # Soft-guard: attempt to claim but ALWAYS proceed with TP/SL placement.
+                    # claim returns False both when "already claimed" AND "no DB record".
+                    claimed = claim_pending_order({"entry_order_id": order_id})
+                    if not claimed:
                         original_algo_id = config.get("algo_id")
-                        if original_algo_id and not claim_pending_order({"entry_order_id": original_algo_id}):
-                            logger.info(f"[FILL] Algo entry for {symbol} already claimed by another process. Skipping.")
-                            del pending_algo_entries[algo_key]
-                            return
+                        if original_algo_id:
+                            claimed = claim_pending_order({"entry_order_id": original_algo_id})
+                        if not claimed:
+                            logger.warning(f"[FILL] Could not claim algo entry for {symbol} in DB (record may not exist or already claimed). Proceeding with TP/SL anyway.")
                     
                     # Hitung TP/SL dari ACTUAL FILL PRICE, bukan entry signal
                     # Field 'ap' = average price (fill price) dari Binance ORDER_TRADE_UPDATE
@@ -209,13 +215,14 @@ def handle_order_update(event: dict):
                         logger.info(f"[FILL] Algo entry FILLED for {symbol} (orderId={order_id}, fillPrice={fill_price}). TP={tp_price}, SL={sl_price}")
                         
                         # Build resolved config with actual prices for _place_tp_sl
+                        # Prices MUST be strings for Binance API
                         resolved_config = {
                             "symbol": symbol,
                             "position_side": config.get("position_side"),
                             "close_side": config["close_side"],
                             "quantity": config["quantity"],
-                            "tp_price": tp_price,
-                            "sl_price": sl_price,
+                            "tp_price": str(tp_price),
+                            "sl_price": str(sl_price),
                             "tp_type": config.get("tp_type", "LIMIT"),
                             "sl_type": config.get("sl_type", "STOP_MARKET"),
                         }
